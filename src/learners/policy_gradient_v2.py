@@ -36,7 +36,8 @@ class PGLearner_v2:
             self.params += list(self.mixer.parameters())
 
         self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
-
+        self.mixer_optimiser = RMSprop(params=list(self.mixer.parameters()), lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
+        
     def train(self, batch: EpisodeBatch, t_env: int, episode_num: int):
         # Get the relevant quantities
         bs = batch.batch_size
