@@ -52,7 +52,7 @@ class PGLearner_v2:
         critic_mask = mask.clone()
         mask = mask.repeat(1, 1, self.n_agents).view(-1)
 
-        advantages, td_error, targets_taken, log_pi_taken, entropy = self._calculate_advs(batch, rewards, terminated, actions, avail_actions,
+        advantages, td_error, targets_taken, log_pi_taken, entropy, gradients = self._calculate_advs(batch, rewards, terminated, actions, avail_actions,
                                                         critic_mask, bs, max_t)
 
         pg_loss = - ((advantages.detach() * log_pi_taken) * mask).sum() / mask.sum()
@@ -69,6 +69,13 @@ class PGLearner_v2:
         grad_norm = th.nn.utils.clip_grad_norm_(self.params, self.args.grad_norm_clip)
         self.optimiser.step()
 
+        gradients_reg = (gradients* mask).sum() / mask.sum()
+        # Regularization
+        self.mixer_optimiser.zero_grad()
+        gradients_reg.backward()
+        grad_norm = th.nn.utils.clip_grad_norm_(self.list(self.mixer.parameters()), self.args.grad_norm_clip)
+        self.mixer_optimiser.step()
+        
 
         if t_env - self.log_stats_t >= self.args.learner_log_interval:
             self.logger.log_stat("critic_loss", ((td_error ** 2) * mask).sum().item() / mask.sum().item(), t_env)
@@ -85,15 +92,21 @@ class PGLearner_v2:
     def _calculate_advs(self, batch, rewards, terminated, actions, avail_actions, mask, bs, max_t):
         mac_out = []
         q_outs = []
+        gradients = []
         # Roll out experiences
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
             agent_out, q_out = self.mac.forward(batch, t=t)
+            output = self.mixer.forward(q_out,batch)
+            gradient = torch.autograd.grad(outputs=output,input = q_out) 
+            gradients.append(torch.max(-gradient,0))
             mac_out.append(agent_out)
             q_outs.append(q_out)
+            
         mac_out = th.stack(mac_out, dim=1)  # Concat over time
         q_outs = th.stack(q_outs, dim=1)  # Concat over time
-
+        gradients = th.stack(gradients, dim=1)  # Concat over time
+        
         # Mask out unavailable actions, renormalise (as in action selection)
         mac_out[avail_actions == 0] = 0
         mac_out = mac_out/mac_out.sum(dim=-1, keepdim=True)
@@ -124,7 +137,7 @@ class PGLearner_v2:
         td_error = td_error.unsqueeze(2).repeat(1, 1, self.n_agents, 1).reshape(-1)
 
 
-        return advantages, td_error, targets_taken[:, :-1].unsqueeze(2).repeat(1, 1, self.n_agents, 1).reshape(-1), log_pi_taken, entropy
+        return advantages, td_error, targets_taken[:, :-1].unsqueeze(2).repeat(1, 1, self.n_agents, 1).reshape(-1), log_pi_taken, entropy, gradients
 
 
     def cuda(self):
