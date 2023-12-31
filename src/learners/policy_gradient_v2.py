@@ -97,15 +97,12 @@ class PGLearner_v2:
         self.mac.init_hidden(batch.batch_size)
         for t in range(batch.max_seq_length):
             agent_out, q_out = self.mac.forward(batch, t=t)
-            output = self.mixer.forward(q_out,batch)
-            gradient = torch.autograd.grad(outputs=output,input = q_out) 
-            gradients.append(torch.max(-gradient,0))
             mac_out.append(agent_out)
             q_outs.append(q_out)
             
         mac_out = th.stack(mac_out, dim=1)  # Concat over time
         q_outs = th.stack(q_outs, dim=1)  # Concat over time
-        gradients = th.stack(gradients, dim=1)  # Concat over time
+        
         
         # Mask out unavailable actions, renormalise (as in action selection)
         mac_out[avail_actions == 0] = 0
@@ -127,6 +124,11 @@ class PGLearner_v2:
         if self.args.mixer:
             targets_taken = self.mixer(targets_taken, batch["state"][:, :]) #[bs, t, 1]
 
+        output = self.mixer.forward(targets_taken, batch["state"][:, :])
+        gradient = torch.autograd.grad(outputs=output,input = q_out) 
+        gradients.append(torch.max(-gradient,0))
+        gradients = th.stack(gradients, dim=1)  # Concat over time
+        
         # Calculate td-lambda targets
         targets = build_td_lambda_targets(rewards, terminated, mask, targets_taken, self.n_agents, self.args.gamma, self.args.td_lambda)
 
